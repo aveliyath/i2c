@@ -47,43 +47,44 @@ static void cleanup_capture_internal(void);
 
 // Event callback for hooks
 static void capture_event_callback(const Event* event) {
-    if (!capture.active || !event) return;
+    if (!capture.active || !event) 
+    printf("[Capture] Callback received no event or capture is inactive.\n");
+    return;
 
     EnterCriticalSection(&capture.lock);
-    __try {
-        char entry[CAPTURE_MAX_ENTRY_SIZE];
-        format_event_entry(event, entry, sizeof(entry));
-        
-        if (capture.config.buffer_events) {
-            if (buffer_event_entry(entry)) {
-                capture.stats.events_buffered++;
-                
-                if (should_flush()) {
-                    flush_buffer_to_file();
-                }
-            } else {
-                capture.stats.buffer_overflows++;
-                CAPTURE_DEBUG("Buffer overflow occurred");
+
+    char entry[CAPTURE_MAX_ENTRY_SIZE];
+    format_event_entry(event, entry, sizeof(entry));
+
+    if (capture.config.buffer_events) {
+        if (buffer_event_entry(entry)) {
+            capture.stats.events_buffered++;
+
+            if (should_flush()) {
+                flush_buffer_to_file();
             }
         } else {
-            if (write_event_to_file(entry)) {
-                capture.stats.events_captured++;
-                
-                if (should_flush()) {
-                    fflush(capture.log_file);
-                    update_flush_timer();
-                }
+            capture.stats.buffer_overflows++;
+            CAPTURE_DEBUG("Buffer overflow occurred");
+        }
+    } else {
+        if (write_event_to_file(entry)) {
+            capture.stats.events_captured++;
+
+            if (should_flush()) {
+                fflush(capture.log_file);
+                update_flush_timer();
             }
         }
-        
-        if (should_rotate_log()) {
-            rotate_log_file();
-        }
     }
-    __finally {
-        LeaveCriticalSection(&capture.lock);
+
+    if (should_rotate_log()) {
+        rotate_log_file();
     }
+
+    LeaveCriticalSection(&capture.lock);
 }
+
 
 bool init_capture(const CaptureConfig* config) {
     if (capture.initialized) {
@@ -91,76 +92,86 @@ bool init_capture(const CaptureConfig* config) {
         return false;
     }
 
-    __try {
-        InitializeCriticalSection(&capture.lock);
-        
-        // Set default configuration if none provided
-        if (config) {
-            if (!validate_config(config)) {
-                set_capture_error(CAPTURE_ERROR_INIT);
-                return false;
-            }
-            memcpy(&capture.config, config, sizeof(CaptureConfig));
-        } else {
-            strncpy(capture.config.log_path, CAPTURE_DEFAULT_LOG, CAPTURE_MAX_PATH);
-            capture.config.mode = CAPTURE_MODE_NORMAL;
-            capture.config.flush_interval = CAPTURE_FLUSH_INTERVAL;
-            capture.config.max_file_size = CAPTURE_MAX_FILE_SIZE;
-            capture.config.rotate_logs = true;
-            capture.config.encrypt_logs = false;
-            capture.config.buffer_events = true;
-        }
+    // Initialize critical section
+    if (!InitializeCriticalSectionAndSpinCount(&capture.lock, 0x00000400)) {
+        set_capture_error(CAPTURE_ERROR_INIT);
+        return false;
+    }
 
-        // Initialize buffer if needed
-        if (capture.config.buffer_events) {
-            capture.buffer_capacity = CAPTURE_BUFFER_SIZE;
-            capture.buffer = (char*)malloc(capture.buffer_capacity);
-            if (!capture.buffer) {
-                set_capture_error(CAPTURE_ERROR_MEMORY);
-                DeleteCriticalSection(&capture.lock);
-                return false;
-            }
+    EnterCriticalSection(&capture.lock);
+    bool init_success = false;
+
+    // Set default configuration if none provided
+    if (config) {
+        if (!validate_config(config)) {
+            set_capture_error(CAPTURE_ERROR_INIT);
+        } else {
+            memcpy(&capture.config, config, sizeof(CaptureConfig));
+            init_success = true;
+        }
+    } else {
+        strncpy(capture.config.log_path, CAPTURE_DEFAULT_LOG, CAPTURE_MAX_PATH);
+        capture.config.mode = CAPTURE_MODE_NORMAL;
+        capture.config.flush_interval = CAPTURE_FLUSH_INTERVAL;
+        capture.config.max_file_size = CAPTURE_MAX_FILE_SIZE;
+        capture.config.rotate_logs = true;
+        capture.config.encrypt_logs = false;
+        capture.config.buffer_events = true;
+        init_success = true;
+    }
+
+    if (init_success && capture.config.buffer_events) {
+        capture.buffer_capacity = CAPTURE_BUFFER_SIZE;
+        capture.buffer = (char*)malloc(capture.buffer_capacity);
+        if (!capture.buffer) {
+            set_capture_error(CAPTURE_ERROR_MEMORY);
+            init_success = false;
+        } else {
             capture.buffer_size = 0;
         }
+    }
 
-        // Create log directory and open file
+    if (init_success) {
         if (!create_log_directory() || !open_log_file()) {
             cleanup_capture_internal();
             set_capture_error(CAPTURE_ERROR_FILE);
-            return false;
+            init_success = false;
         }
+    }
 
-        // Initialize statistics
+    if (init_success) {
         memset(&capture.stats, 0, sizeof(CaptureStats));
         capture.initialized = true;
         capture.last_flush = GetTickCount();
         capture.last_error = CAPTURE_ERROR_NONE;
-        
+
         CAPTURE_DEBUG("Capture system initialized");
-        return true;
     }
-    __except(EXCEPTION_EXECUTE_HANDLER) {
-        cleanup_capture_internal();
-        set_capture_error(CAPTURE_ERROR_INIT);
-        return false;
+
+    LeaveCriticalSection(&capture.lock);
+
+    if (!init_success) {
+        DeleteCriticalSection(&capture.lock);
     }
+
+    return init_success;
 }
+
 
 void cleanup_capture(void) {
     if (!capture.initialized) return;
 
     EnterCriticalSection(&capture.lock);
-    __try {
-        if (capture.active) {
-            stop_capture();
-        }
-        cleanup_capture_internal();
+
+    if (capture.active) {
+        stop_capture();
     }
-    __finally {
-        LeaveCriticalSection(&capture.lock);
-        DeleteCriticalSection(&capture.lock);
-    }
+    cleanup_capture_internal();
+
+    LeaveCriticalSection(&capture.lock);
+    DeleteCriticalSection(&capture.lock);
 }
+
 
 static void cleanup_capture_internal(void) {
     if (capture.buffer) {
@@ -183,54 +194,56 @@ static void cleanup_capture_internal(void) {
 bool start_capture(void) {
     if (!capture.initialized || capture.active) {
         set_capture_error(CAPTURE_ERROR_INIT);
+        printf("[Capture] Start capture failed: Not initialized or already active.\n");
         return false;
     }
 
     EnterCriticalSection(&capture.lock);
-    __try {
-        if (!register_hook_callback(capture_event_callback)) {
-            set_capture_error(CAPTURE_ERROR_HOOKS);
-            return false;
-        }
-        
-        capture.active = true;
-        capture.last_flush = GetTickCount();
-        CAPTURE_DEBUG("Capture started");
-        return true;
-    }
-    __finally {
+
+    if (!register_hook_callback(capture_event_callback)) {
+        set_capture_error(CAPTURE_ERROR_HOOKS);
+        printf("[Capture] Failed to register hook callback.\n");
         LeaveCriticalSection(&capture.lock);
+        return false;
     }
+
+    capture.active = true;
+    capture.last_flush = GetTickCount();
+    CAPTURE_DEBUG("Capture started");
+
+    LeaveCriticalSection(&capture.lock);
+    return true;
 }
+
 
 void stop_capture(void) {
     if (!capture.active) return;
 
     EnterCriticalSection(&capture.lock);
-    __try {
-        unregister_hook_callback(capture_event_callback);
-        
-        if (capture.buffer_size > 0) {
-            flush_buffer_to_file();
-        }
-        
-        if (capture.log_file) {
-            fflush(capture.log_file);
-        }
-        
-        capture.active = false;
-        CAPTURE_DEBUG("Capture stopped");
+
+    unregister_hook_callback(capture_event_callback);
+
+    if (capture.buffer_size > 0) {
+        flush_buffer_to_file();
     }
-    __finally {
-        LeaveCriticalSection(&capture.lock);
+
+    if (capture.log_file) {
+        fflush(capture.log_file);
     }
+
+    capture.active = false;
+    CAPTURE_DEBUG("Capture stopped");
+
+    LeaveCriticalSection(&capture.lock);
 }
 
+
 static bool open_log_file(void) {
-    char full_path[CAPTURE_MAX_PATH];
+    char full_path[CAPTURE_MAX_PATH + 10];
     snprintf(full_path, sizeof(full_path), "%s/%s", 
              CAPTURE_LOG_DIR, capture.config.log_path);
 
+    printf("[Capture] Opening log file: %s\n", full_path);
     capture.log_file = fopen(full_path, "ab");
     if (!capture.log_file) {
         set_capture_error(CAPTURE_ERROR_FILE);
@@ -252,18 +265,28 @@ static void close_log_file(void) {
 static bool rotate_log_file(void) {
     if (!capture.config.rotate_logs || !capture.log_file) return false;
 
-    char timestamp[32];
+    char timestamp[64];
     SYSTEMTIME st;
     GetLocalTime(&st);
     snprintf(timestamp, sizeof(timestamp), "%04d%02d%02d_%02d%02d%02d",
              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
 
-    char old_path[CAPTURE_MAX_PATH];
-    char new_path[CAPTURE_MAX_PATH];
-    snprintf(old_path, sizeof(old_path), "%s/%s", 
-             CAPTURE_LOG_DIR, capture.config.log_path);
-    snprintf(new_path, sizeof(new_path), "%s/%s.%s", 
-             CAPTURE_LOG_DIR, capture.config.log_path, timestamp);
+    char old_path[512];
+    char new_path[512];
+
+    int written = snprintf(old_path, sizeof(old_path), "%s/%s", 
+                           CAPTURE_LOG_DIR, capture.config.log_path);
+    if (written < 0 || (size_t)written >= sizeof(old_path)) {
+        CAPTURE_DEBUG("Buffer overflow detected in old_path");
+        return false;
+    }
+
+    written = snprintf(new_path, sizeof(new_path), "%s/%s.%s", 
+                       CAPTURE_LOG_DIR, capture.config.log_path, timestamp);
+    if (written < 0 || (size_t)written >= sizeof(new_path)) {
+        CAPTURE_DEBUG("Buffer overflow detected in new_path");
+        return false;
+    }
 
     close_log_file();
 
@@ -276,6 +299,7 @@ static bool rotate_log_file(void) {
     return false;
 }
 
+
 static void format_event_entry(const Event* event, char* buffer, size_t size) {
     if (!event || !buffer || size == 0) return;
 
@@ -283,11 +307,16 @@ static void format_event_entry(const Event* event, char* buffer, size_t size) {
     SYSTEMTIME st;
     GetLocalTime(&st);
     
-    snprintf(timestamp, sizeof(timestamp), 
-             "%04d-%02d-%02d %02d:%02d:%02d.%03d",
-             st.wYear, st.wMonth, st.wDay,
-             st.wHour, st.wMinute, st.wSecond,
-             st.wMilliseconds);
+    int written = snprintf(timestamp, sizeof(timestamp),
+                       "%04d-%02d-%02d %02d:%02d:%02d.%03hu",
+                       st.wYear, st.wMonth, st.wDay,
+                       st.wHour, st.wMinute, st.wSecond,
+                       (unsigned short)st.wMilliseconds);
+
+    if (written < 0 || (size_t)written >= sizeof(timestamp)) {
+        CAPTURE_DEBUG("Timestamp buffer overflow in format_event_entry");
+        timestamp[0] = '\0';
+    }
 
     switch (event->type) {
         case EVENT_KEY_PRESS:
@@ -308,7 +337,7 @@ static void format_event_entry(const Event* event, char* buffer, size_t size) {
         case EVENT_MOUSE_MOVE:
         case EVENT_MOUSE_WHEEL:
             snprintf(buffer, size,
-                    "[%s] MOUSE %s X:%ld Y:%ld BTN:%s%s%s WHL:%d\n",
+                    "[%s] MOUSE %s X:%d Y:%d BTN:%s%s%s WHL:%d\n",
                     timestamp,
                     event->type == EVENT_MOUSE_CLICK ? "CLICK" :
                     event->type == EVENT_MOUSE_MOVE ? "MOVE" : "WHEEL",
@@ -322,7 +351,7 @@ static void format_event_entry(const Event* event, char* buffer, size_t size) {
 
         case EVENT_WINDOW_CHANGE:
             snprintf(buffer, size,
-                    "[%s] WINDOW TITLE:'%s' PROCESS:'%s' PID:%lu\n",
+                    "[%s] WINDOW TITLE:'%s' PROCESS:'%s' PID:%u\n",
                     timestamp,
                     event->data.window.title,
                     event->data.window.process,
@@ -400,13 +429,13 @@ static bool flush_buffer_to_file(void) {
 static bool should_rotate_log(void) {
     if (!capture.config.rotate_logs || !capture.log_file) return false;
     
-    long file_size = ftell(capture.log_file);
+    size_t file_size = (size_t)ftell(capture.log_file);
     return file_size >= capture.config.max_file_size;
 }
 
 static bool create_log_directory(void) {
-    if (CreateDirectoryA(CAPTURE_LOG_DIR, NULL) || 
-        GetLastError() == ERROR_ALREADY_EXISTS) {
+    printf("[Capture] Creating log directory: %s\n", CAPTURE_LOG_DIR);
+    if (CreateDirectoryA(CAPTURE_LOG_DIR, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) {
         return true;
     }
     
@@ -428,7 +457,7 @@ static bool should_flush(void) {
 
 static void set_capture_error(DWORD error) {
     capture.last_error = error;
-    CAPTURE_DEBUG("Capture error set: %lu", error);
+    CAPTURE_DEBUG("Capture error set: %u", error);
 }
 
 static bool validate_config(const CaptureConfig* config) {

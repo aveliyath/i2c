@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <assert.h>
 
 // Global buffer instance
@@ -17,104 +18,86 @@ static void reset_buffer_stats_internal(void);
 // Initialize buffer
 bool init_buffer(void) {
     // Check if already initialized
-    bool was_initialized;
     EnterCriticalSection(&buffer.lock);
-    was_initialized = buffer.initialized;
+    if (buffer.initialized) {
+        set_buffer_error_internal(BUFFER_ERROR_INIT);
+        LeaveCriticalSection(&buffer.lock);
+        return false;
+    }
     LeaveCriticalSection(&buffer.lock);
 
-    if (was_initialized) {
-        set_buffer_error_internal(BUFFER_ERROR_INIT);
-        return false;
-    }
-
     // Initialize critical section
-    __try {
-        InitializeCriticalSection(&buffer.lock);
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER) {
+    if (!InitializeCriticalSectionAndSpinCount(&buffer.lock, 0x00000400)) { // 0x00000400: Spin count
         set_buffer_error_internal(BUFFER_ERROR_INIT);
         return false;
     }
 
     EnterCriticalSection(&buffer.lock);
-    bool init_success = false;
-    
-    __try {
-        // Allocate and initialize buffer memory
-        buffer.data = (char*)malloc(BUFFER_SIZE);
-        if (!buffer.data) {
-            set_buffer_error_internal(BUFFER_ERROR_MEMORY);
-            __leave;
-        }
-        memset(buffer.data, 0, BUFFER_SIZE);
 
-        // Initialize buffer properties
-        buffer.capacity = BUFFER_SIZE;
-        buffer.size = 0;
-        buffer.initialized = true;
-        buffer.last_error = BUFFER_ERROR_NONE;
-        reset_buffer_stats_internal();
-
-        BUFFER_LOG("Buffer initialized with capacity: %zu bytes", buffer.capacity);
-        init_success = true;
-    }
-    __finally {
+    // Allocate and initialize buffer memory
+    buffer.data = (char *)malloc(BUFFER_SIZE);
+    if (!buffer.data) {
         LeaveCriticalSection(&buffer.lock);
-        if (!init_success) {
-            DeleteCriticalSection(&buffer.lock);
-        }
+        DeleteCriticalSection(&buffer.lock);
+        set_buffer_error_internal(BUFFER_ERROR_MEMORY);
+        return false;
     }
 
-    return init_success;
+    memset(buffer.data, 0, BUFFER_SIZE);
+    buffer.capacity = BUFFER_SIZE;
+    buffer.size = 0;
+    buffer.initialized = true;
+    buffer.last_error = BUFFER_ERROR_NONE;
+    reset_buffer_stats_internal();
+
+    BUFFER_LOG("Buffer initialized with capacity: %zu bytes", buffer.capacity);
+    LeaveCriticalSection(&buffer.lock);
+
+    return true;
 }
 
 // Clean up buffer resources
 void cleanup_buffer(void) {
-    bool was_initialized;
     EnterCriticalSection(&buffer.lock);
-    was_initialized = buffer.initialized;
-    LeaveCriticalSection(&buffer.lock);
-
-    if (!was_initialized) {
+    if (!buffer.initialized) {
+        LeaveCriticalSection(&buffer.lock);
         return;
     }
 
-    EnterCriticalSection(&buffer.lock);
-    __try {
-        if (buffer.size > 0) {
-            BUFFER_LOG("Flushing remaining %zu bytes during cleanup", buffer.size);
-            if (buffer.data) {
-                force_flush_buffer();
-            }
-        }
+    // Flush remaining data
+    if (buffer.size > 0) {
+        BUFFER_LOG("Flushing remaining %zu bytes during cleanup", buffer.size);
+        force_flush_buffer();
+    }
 
-        if (buffer.data) {
-            free(buffer.data);
-            buffer.data = NULL;
-        }
-        buffer.size = 0;
-        buffer.capacity = 0;
-        buffer.initialized = false;
-        
-        BUFFER_LOG("Buffer cleanup complete. Stats: Flushes: %zu, Failed: %zu, Writes: %zu, Failed: %zu",
-                  buffer.stats.total_flushes, buffer.stats.failed_flushes,
-                  buffer.stats.total_writes, buffer.stats.failed_writes);
+    // Free allocated memory
+    if (buffer.data) {
+        free(buffer.data);
+        buffer.data = NULL;
     }
-    __finally {
-        LeaveCriticalSection(&buffer.lock);
-        DeleteCriticalSection(&buffer.lock);
-    }
+
+    buffer.size = 0;
+    buffer.capacity = 0;
+    buffer.initialized = false;
+
+    BUFFER_LOG("Buffer cleanup complete. Stats: Flushes: %zu, Failed: %zu, Writes: %zu, Failed: %zu",
+               buffer.stats.total_flushes, buffer.stats.failed_flushes,
+               buffer.stats.total_writes, buffer.stats.failed_writes);
+    LeaveCriticalSection(&buffer.lock);
+
+    // Delete critical section
+    DeleteCriticalSection(&buffer.lock);
 }
 
+
 // Add data to buffer
-bool add_to_buffer(const char* event_data, size_t data_size) {
+bool add_to_buffer(const char *event_data, size_t data_size) {
     if (!event_data || data_size == 0 || data_size > BUFFER_MAX_EVENT_SIZE) {
         set_buffer_error_internal(BUFFER_ERROR_INVALID);
         BUFFER_LOG("Invalid buffer add attempt: size=%zu", data_size);
         return false;
     }
 
-    // Check for integer overflow
     if (data_size > SIZE_MAX - buffer.size) {
         set_buffer_error_internal(BUFFER_ERROR_INVALID);
         BUFFER_LOG("Integer overflow detected in add_to_buffer");
@@ -126,38 +109,36 @@ bool add_to_buffer(const char* event_data, size_t data_size) {
     }
 
     EnterCriticalSection(&buffer.lock);
-    bool success = false;
 
-    __try {
-        // Check if there's enough space
-        if (buffer.size + data_size > buffer.capacity) {
-            BUFFER_LOG("Buffer full, attempting flush before add");
-            if (!force_flush_buffer()) {
-                set_buffer_error_internal(BUFFER_ERROR_FULL);
-                buffer.stats.failed_writes++;
-                __leave;
-            }
-        }
-
-        // Double check after potential flush
-        if (buffer.size + data_size <= buffer.capacity) {
-            memcpy(buffer.data + buffer.size, event_data, data_size);
-            buffer.size += data_size;
-            buffer.stats.total_writes++;
-            success = true;
-            BUFFER_LOG("Added %zu bytes to buffer, total size: %zu", data_size, buffer.size);
-        } else {
+    // Check if there's enough space
+    if (buffer.size + data_size > buffer.capacity) {
+        BUFFER_LOG("Buffer full, attempting flush before add");
+        if (!force_flush_buffer()) {
             set_buffer_error_internal(BUFFER_ERROR_FULL);
             buffer.stats.failed_writes++;
-            BUFFER_LOG("Buffer full after flush attempt");
+            LeaveCriticalSection(&buffer.lock);
+            return false;
         }
     }
-    __finally {
+
+    // Add data to buffer
+    if (buffer.size + data_size <= buffer.capacity) {
+        memcpy(buffer.data + buffer.size, event_data, data_size);
+        buffer.size += data_size;
+        buffer.stats.total_writes++;
+        BUFFER_LOG("Added %zu bytes to buffer, total size: %zu", data_size, buffer.size);
         LeaveCriticalSection(&buffer.lock);
+        return true;
+    } else {
+        set_buffer_error_internal(BUFFER_ERROR_FULL);
+        buffer.stats.failed_writes++;
+        BUFFER_LOG("Buffer full after flush attempt");
     }
 
-    return success;
+    LeaveCriticalSection(&buffer.lock);
+    return false;
 }
+
 
 // Check if buffer should be flushed
 static bool should_flush_buffer(void) {
@@ -171,20 +152,17 @@ bool flush_buffer_if_needed(void) {
     }
 
     EnterCriticalSection(&buffer.lock);
-    bool flushed = false;
-
-    __try {
-        if (should_flush_buffer()) {
-            BUFFER_LOG("Threshold reached (%zu bytes), flushing buffer", buffer.size);
-            flushed = force_flush_buffer();
-        }
-    }
-    __finally {
+    if (should_flush_buffer()) {
+        BUFFER_LOG("Threshold reached (%zu bytes), flushing buffer", buffer.size);
+        bool flushed = force_flush_buffer();
         LeaveCriticalSection(&buffer.lock);
+        return flushed;
     }
+    LeaveCriticalSection(&buffer.lock);
 
-    return flushed;
+    return false;
 }
+
 
 // Force buffer flush
 bool force_flush_buffer(void) {
@@ -193,29 +171,24 @@ bool force_flush_buffer(void) {
     }
 
     EnterCriticalSection(&buffer.lock);
-    bool flush_success = false;
 
-    __try {
-        buffer.stats.total_flushes++;
-        
-        // Write buffer contents to log file
-        if (write_to_log(buffer.data, buffer.size)) {
-            buffer.size = 0;
-            memset(buffer.data, 0, buffer.capacity);
-            flush_success = true;
-            BUFFER_LOG("Buffer flushed successfully");
-        } else {
-            buffer.stats.failed_flushes++;
-            set_buffer_error_internal(BUFFER_ERROR_FLUSH);
-            BUFFER_LOG("Buffer flush failed");
-        }
-    }
-    __finally {
+    buffer.stats.total_flushes++;
+    if (write_to_log(buffer.data, buffer.size)) {
+        buffer.size = 0;
+        memset(buffer.data, 0, buffer.capacity);
+        BUFFER_LOG("Buffer flushed successfully");
         LeaveCriticalSection(&buffer.lock);
+        return true;
+    } else {
+        buffer.stats.failed_flushes++;
+        set_buffer_error_internal(BUFFER_ERROR_FLUSH);
+        BUFFER_LOG("Buffer flush failed");
     }
 
-    return flush_success;
+    LeaveCriticalSection(&buffer.lock);
+    return false;
 }
+
 
 // Utility functions
 bool is_buffer_initialized(void) {
@@ -256,16 +229,15 @@ void clear_buffer(void) {
     }
 
     EnterCriticalSection(&buffer.lock);
-    __try {
-        buffer.size = 0;
-        memset(buffer.data, 0, buffer.capacity);
-        reset_buffer_stats_internal();
-        BUFFER_LOG("Buffer cleared and stats reset");
-    }
-    __finally {
-        LeaveCriticalSection(&buffer.lock);
-    }
+
+    buffer.size = 0;
+    memset(buffer.data, 0, buffer.capacity);
+    reset_buffer_stats_internal();
+
+    BUFFER_LOG("Buffer cleared and stats reset");
+    LeaveCriticalSection(&buffer.lock);
 }
+
 
 bool check_buffer_health(void) {
     if (!validate_buffer_state()) {
@@ -328,9 +300,8 @@ void reset_buffer_stats(void) {
 
 // Internal helper functions
 static void set_buffer_error_internal(DWORD error_code) {
-    // Note: Should only be called when lock is already held or during initialization
     buffer.last_error = error_code;
-    BUFFER_LOG("Buffer error set: %lu", error_code);
+    BUFFER_LOG("Buffer error set: %u", error_code);
 }
 
 static bool validate_buffer_state(void) {
@@ -344,7 +315,6 @@ static bool validate_buffer_state(void) {
 }
 
 static void reset_buffer_stats_internal(void) {
-    // Note: Should only be called when lock is already held
     assert(buffer.initialized);
     buffer.stats.total_flushes = 0;
     buffer.stats.failed_flushes = 0;

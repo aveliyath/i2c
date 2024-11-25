@@ -10,6 +10,9 @@
     #define HOOK_DEBUG(msg, ...)
 #endif
 
+LRESULT CALLBACK keyboard_proc(int nCode, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK mouse_proc(int nCode, WPARAM wParam, LPARAM lParam);
+
 // Global variables
 static HookSystem hooks = {0};
 static volatile bool hooks_active = false;
@@ -21,7 +24,7 @@ static void cleanup_critical_section(void);
 static void check_active_window(void);
 static void set_last_error(DWORD error_code);
 static bool get_process_name(HWND hwnd, char* process_name, size_t size);
-static void create_keyboard_event(Event* event, KBDLLHOOKSTRUCT* kb, UINT msg);
+static void create_keyboard_event(Event* event, KBDLLHOOKSTRUCT* kb);
 static void create_mouse_event(Event* event, MSLLHOOKSTRUCT* mouse, UINT msg);
 static void create_window_event(Event* event, HWND hwnd);
 static bool is_valid_window(HWND hwnd);
@@ -45,35 +48,35 @@ bool init_hooks(EventCallback callback) {
     }
 
     EnterCriticalSection(&hooks.lock);
-    bool init_success = false;
+    bool init_success = true;
 
-    __try {
-        // Initialize callback and filters
-        hooks.callback = callback;
-        reset_hook_filters();
-        
-        // Reset statistics
-        memset(&hooks.stats, 0, sizeof(hooks.stats));
-        
-        // Reset queue
-        hooks.event_queue.queue_head = 0;
-        hooks.event_queue.queue_tail = 0;
+    // Initialize callback and filters
+    hooks.callback = callback;
+    reset_hook_filters();
 
-        // Install keyboard hook
-        hooks.keyboard = SetWindowsHookEx(
-            WH_KEYBOARD_LL,
-            keyboard_proc,
-            GetModuleHandle(NULL),
-            0
-        );
+    // Reset statistics
+    memset(&hooks.stats, 0, sizeof(hooks.stats));
 
-        if (!hooks.keyboard) {
-            set_last_error(HOOK_ERROR_HOOK_FAILED);
-            HOOK_DEBUG("Failed to install keyboard hook: %lu", GetLastError());
-            __leave;
-        }
+    // Reset queue
+    hooks.event_queue.queue_head = 0;
+    hooks.event_queue.queue_tail = 0;
 
-        // Install mouse hook
+    // Install keyboard hook
+    hooks.keyboard = SetWindowsHookEx(
+        WH_KEYBOARD_LL,
+        keyboard_proc,
+        GetModuleHandle(NULL),
+        0
+    );
+
+    if (!hooks.keyboard) {
+        set_last_error(HOOK_ERROR_HOOK_FAILED);
+        HOOK_DEBUG("Failed to install keyboard hook: %u", GetLastError());
+        init_success = false;
+    }
+
+    // Install mouse hook
+    if (init_success) {
         hooks.mouse = SetWindowsHookEx(
             WH_MOUSE_LL,
             mouse_proc,
@@ -83,37 +86,34 @@ bool init_hooks(EventCallback callback) {
 
         if (!hooks.mouse) {
             set_last_error(HOOK_ERROR_HOOK_FAILED);
-            HOOK_DEBUG("Failed to install mouse hook: %lu", GetLastError());
-            __leave;
+            HOOK_DEBUG("Failed to install mouse hook: %u", GetLastError());
+            init_success = false;
         }
+    }
 
-        // Verify hooks are working
-        if (!verify_hooks()) {
-            set_last_error(HOOK_ERROR_HOOK_FAILED);
-            HOOK_DEBUG("Hook verification failed");
-            __leave;
-        }
+    // Verify hooks are working
+    if (init_success && !verify_hooks()) {
+        set_last_error(HOOK_ERROR_HOOK_FAILED);
+        HOOK_DEBUG("Hook verification failed");
+        init_success = false;
+    }
 
+    if (init_success) {
         // Initialize window tracking
         hooks.activeWindow = NULL;
         memset(hooks.windowTitle, 0, MAX_WINDOW_TITLE);
         memset(hooks.processName, 0, MAX_PROCESS_NAME);
 
         hooks_active = true;
-        init_success = true;
-        HOOK_DEBUG("Hooks initialized successfully");
-    }
-    __finally {
-        LeaveCriticalSection(&hooks.lock);
-        if (!init_success) {
-            cleanup_hooks();
-        }
+        HOOK_DEBUG("Hooks initialized successfully, xD");
+    } else {
+        cleanup_hooks();
     }
 
+    LeaveCriticalSection(&hooks.lock);
     return init_success;
 }
 
-// Cleanup hooks
 void cleanup_hooks(void) {
     if (!hooks_active) {
         return;
@@ -121,39 +121,38 @@ void cleanup_hooks(void) {
 
     // Set inactive first to prevent new events
     hooks_active = false;
-    
+
     EnterCriticalSection(&hooks.lock);
-    __try {
-        // Process remaining events
-        process_remaining_events();
 
-        // Unhook keyboard
-        if (hooks.keyboard) {
-            UnhookWindowsHookEx(hooks.keyboard);
-            hooks.keyboard = NULL;
-        }
+    // Process remaining events
+    process_remaining_events();
 
-        // Unhook mouse
-        if (hooks.mouse) {
-            UnhookWindowsHookEx(hooks.mouse);
-            hooks.mouse = NULL;
-        }
-
-        // Reset window tracking
-        hooks.activeWindow = NULL;
-        memset(hooks.windowTitle, 0, MAX_WINDOW_TITLE);
-        memset(hooks.processName, 0, MAX_PROCESS_NAME);
-
-        // Clear callback
-        hooks.callback = NULL;
+    // Unhook keyboard
+    if (hooks.keyboard) {
+        UnhookWindowsHookEx(hooks.keyboard);
+        hooks.keyboard = NULL;
     }
-    __finally {
-        LeaveCriticalSection(&hooks.lock);
-        cleanup_critical_section();
+
+    // Unhook mouse
+    if (hooks.mouse) {
+        UnhookWindowsHookEx(hooks.mouse);
+        hooks.mouse = NULL;
     }
+
+    // Reset window tracking
+    hooks.activeWindow = NULL;
+    memset(hooks.windowTitle, 0, MAX_WINDOW_TITLE);
+    memset(hooks.processName, 0, MAX_PROCESS_NAME);
+
+    // Clear callback
+    hooks.callback = NULL;
+
+    LeaveCriticalSection(&hooks.lock);
+    cleanup_critical_section();
 
     HOOK_DEBUG("Hooks cleaned up successfully");
 }
+
 
 // Hook callbacks
 LRESULT CALLBACK keyboard_proc(int nCode, WPARAM wParam, LPARAM lParam) {
@@ -165,13 +164,13 @@ LRESULT CALLBACK keyboard_proc(int nCode, WPARAM wParam, LPARAM lParam) {
             case WM_KEYDOWN:
             case WM_SYSKEYDOWN:
                 event.type = EVENT_KEY_PRESS;
-                create_keyboard_event(&event, kb, wParam);
+                create_keyboard_event(&event, kb);
                 queue_event(&event);
                 break;
             case WM_KEYUP:
             case WM_SYSKEYUP:
                 event.type = EVENT_KEY_RELEASE;
-                create_keyboard_event(&event, kb, wParam);
+                create_keyboard_event(&event, kb);
                 queue_event(&event);
                 break;
         }
@@ -190,7 +189,7 @@ LRESULT CALLBACK mouse_proc(int nCode, WPARAM wParam, LPARAM lParam) {
 }
 
 // Event creation functions
-static void create_keyboard_event(Event* event, KBDLLHOOKSTRUCT* kb, UINT msg) {
+static void create_keyboard_event(Event* event, KBDLLHOOKSTRUCT* kb) {
     if (!event || !kb) return;
 
     event->timestamp = GetTickCount();
@@ -198,14 +197,15 @@ static void create_keyboard_event(Event* event, KBDLLHOOKSTRUCT* kb, UINT msg) {
     event->data.keyboard.scanCode = kb->scanCode;
     event->data.keyboard.extended = (kb->flags & LLKHF_EXTENDED) != 0;
     event->data.keyboard.injected = (kb->flags & LLKHF_INJECTED) != 0;
-    
-    // Get modifier states
+
+    // Modifier-Tastenstatus
     event->data.keyboard.alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
     event->data.keyboard.shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
     event->data.keyboard.control = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
     event->data.keyboard.win = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
-                              (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+                               (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
 }
+
 
 static void create_mouse_event(Event* event, MSLLHOOKSTRUCT* mouse, UINT msg) {
     if (!event || !mouse) return;
@@ -356,45 +356,39 @@ static bool verify_hooks(void) {
     return true;
 }
 
-// Process events
 bool process_events(void) {
+    printf("[DEBUG] Entering process_events...\n");
     if (!hooks_active) {
+        printf("[DEBUG] Hooks are not active\n");
         return false;
     }
 
     EnterCriticalSection(&hooks.lock);
-    __try {
-        check_active_window();
-        
-        MSG msg;
-        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
 
-        while (process_queued_event()) {
-            // Process all available events
-        }
-        
-        return true;
+    check_active_window();
+
+    MSG msg;
+    while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
     }
-    __finally {
-        LeaveCriticalSection(&hooks.lock);
+
+    while (process_queued_event()) {
+        printf("[DEBUG] Processed an event from the queue.\n");
     }
+
+    LeaveCriticalSection(&hooks.lock);
+    return true;
 }
+
 
 // Utility functions
 static bool init_critical_section(void) {
-    __try {
-        InitializeCriticalSection(&hooks.lock);
-        InitializeCriticalSection(&hooks.event_queue.queue_lock);
-        return true;
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER) {
-        cleanup_critical_section();
-        return false;
-    }
+    InitializeCriticalSection(&hooks.lock);
+    InitializeCriticalSection(&hooks.event_queue.queue_lock);
+    return true;
 }
+
 
 static void cleanup_critical_section(void) {
     if (hooks.lock.DebugInfo)
@@ -409,7 +403,7 @@ static bool is_valid_window(HWND hwnd) {
 
 static void set_last_error(DWORD error_code) {
     last_error = error_code;
-    HOOK_DEBUG("Hook error set: %lu", error_code);
+    HOOK_DEBUG("Hook error set: %u", error_code);
 }
 
 static bool get_process_name(HWND hwnd, char* process_name, size_t size) {
@@ -417,26 +411,24 @@ static bool get_process_name(HWND hwnd, char* process_name, size_t size) {
 
     DWORD processId;
     GetWindowThreadProcessId(hwnd, &processId);
-    
+
     HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
     if (!hProcess) return false;
-    
+
     bool success = false;
-    __try {
-        if (GetModuleFileNameExA(hProcess, NULL, process_name, size)) {
-            char* last_slash = strrchr(process_name, '\\');
-            if (last_slash) {
-                memmove(process_name, last_slash + 1, strlen(last_slash + 1) + 1);
-            }
-            success = true;
+
+    if (GetModuleFileNameExA(hProcess, NULL, process_name, size)) {
+        char* last_slash = strrchr(process_name, '\\');
+        if (last_slash) {
+            memmove(process_name, last_slash + 1, strlen(last_slash + 1) + 1);
         }
+        success = true;
     }
-    __finally {
-        CloseHandle(hProcess);
-    }
-    
+
+    CloseHandle(hProcess);
     return success;
 }
+
 
 // Event filtering
 static bool should_process_event(const Event* event) {
@@ -551,5 +543,29 @@ void reset_hook_filters(void) {
     hooks.filters.capture_mouse = true;
     hooks.filters.capture_window_changes = true;
     hooks.filters.ignore_injected = false;
+    LeaveCriticalSection(&hooks.lock);
+}
+
+// Register callback function
+bool register_hook_callback(EventCallback callback) {
+    if (!callback) {
+        return false;
+    }
+
+    EnterCriticalSection(&hooks.lock);
+    hooks.callback = callback;
+    LeaveCriticalSection(&hooks.lock);
+
+    HOOK_DEBUG("Hook callback registered successfully");
+    return true;
+}
+
+// Unregister callback function
+void unregister_hook_callback(EventCallback callback) {
+    EnterCriticalSection(&hooks.lock);
+    if (hooks.callback == callback) {
+        hooks.callback = NULL;
+        HOOK_DEBUG("Hook callback unregistered successfully");
+    }
     LeaveCriticalSection(&hooks.lock);
 }

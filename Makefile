@@ -1,6 +1,6 @@
 # Compiler and flags
 CC = gcc
-CFLAGS = -Wall -Wextra -Werror -I./include
+CFLAGS = -Wall -Wextra -Werror -I$(shell cygpath -w ./include)
 LDFLAGS = 
 
 # OS-specific settings

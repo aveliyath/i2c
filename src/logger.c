@@ -41,10 +41,7 @@ bool init_logger(const char* filepath) {
     }
 
     // Initialize critical section
-    __try {
-        InitializeCriticalSection(&logger.lock);
-    }
-    __except(EXCEPTION_EXECUTE_HANDLER) {
+    if (!InitializeCriticalSectionAndSpinCount(&logger.lock, 0x00000400)) {
         set_logger_error_internal(LOG_ERROR_INIT);
         LOG_DEBUG("Failed to initialize critical section");
         return false;
@@ -53,86 +50,79 @@ bool init_logger(const char* filepath) {
     EnterCriticalSection(&logger.lock);
     bool init_success = false;
 
-    __try {
-        // Create or open log file
-        logger.file_handle = CreateFileA(
-            filepath,
-            FILE_APPEND_DATA,
-            FILE_SHARE_READ,
-            NULL,
-            OPEN_ALWAYS,
-            FILE_ATTRIBUTE_NORMAL,
-            NULL
-        );
+    // Create or open log file
+    logger.file_handle = CreateFileA(
+        filepath,
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
 
-        if (logger.file_handle == INVALID_HANDLE_VALUE) {
-            set_logger_error_internal(LOG_ERROR_FILE);
-            LOG_DEBUG("Failed to open log file: %s (Error: %lu)", 
-                     filepath, GetLastError());
-            __leave;
-        }
-
+    if (logger.file_handle == INVALID_HANDLE_VALUE) {
+        set_logger_error_internal(LOG_ERROR_FILE);
+        LOG_DEBUG("Failed to open log file: %s (Error: %u)", filepath, GetLastError());
+    } else {
         // Get initial file size
         LARGE_INTEGER file_size;
-        if (!GetFileSizeEx(logger.file_handle, &file_size)) {
+        if (GetFileSizeEx(logger.file_handle, &file_size)) {
+            logger.current_file_size = (size_t)file_size.QuadPart;
+
+            // Initialize logger properties
+            strncpy(logger.filepath, filepath, LOG_MAX_PATH - 1);
+            logger.filepath[LOG_MAX_PATH - 1] = '\0';
+            logger.initialized = true;
+            logger.last_error = LOG_ERROR_NONE;
+            memset(&logger.stats, 0, sizeof(logger.stats));
+
+            LOG_DEBUG("Logger initialized with file: %s (Size: %zu)", filepath, logger.current_file_size);
+            init_success = true;
+        } else {
             set_logger_error_internal(LOG_ERROR_FILE);
-            LOG_DEBUG("Failed to get file size (Error: %lu)", GetLastError());
-            __leave;
+            LOG_DEBUG("Failed to get file size (Error: %u)", GetLastError());
         }
-        logger.current_file_size = (size_t)file_size.QuadPart;
-
-        // Initialize logger properties
-        strncpy(logger.filepath, filepath, LOG_MAX_PATH - 1);
-        logger.filepath[LOG_MAX_PATH - 1] = '\0';
-        logger.initialized = true;
-        logger.last_error = LOG_ERROR_NONE;
-        memset(&logger.stats, 0, sizeof(logger.stats));
-
-        LOG_DEBUG("Logger initialized with file: %s (Size: %zu)", 
-                 filepath, logger.current_file_size);
-        init_success = true;
     }
-    __finally {
-        LeaveCriticalSection(&logger.lock);
-        if (!init_success) {
-            if (logger.file_handle != INVALID_HANDLE_VALUE) {
-                CloseHandle(logger.file_handle);
-                logger.file_handle = INVALID_HANDLE_VALUE;
-            }
-            DeleteCriticalSection(&logger.lock);
-        }
+
+    if (!init_success && logger.file_handle != INVALID_HANDLE_VALUE) {
+        CloseHandle(logger.file_handle);
+        logger.file_handle = INVALID_HANDLE_VALUE;
+    }
+
+    LeaveCriticalSection(&logger.lock);
+    if (!init_success) {
+        DeleteCriticalSection(&logger.lock);
     }
 
     return init_success;
 }
 
-// Clean up logger resources
+
 void cleanup_logger(void) {
     if (!logger.initialized) {
         return;
     }
 
     EnterCriticalSection(&logger.lock);
-    __try {
-        if (logger.file_handle != INVALID_HANDLE_VALUE) {
-            FlushFileBuffers(logger.file_handle);
-            CloseHandle(logger.file_handle);
-            logger.file_handle = INVALID_HANDLE_VALUE;
-        }
-        logger.initialized = false;
-        
-        LOG_DEBUG("Logger cleanup complete. Stats: Writes: %zu, Failed: %zu, "
-                 "Bytes: %zu, Retries: %zu",
-                 logger.stats.total_writes,
-                 logger.stats.failed_writes,
-                 logger.stats.bytes_written,
-                 logger.stats.retry_count);
+
+    if (logger.file_handle != INVALID_HANDLE_VALUE) {
+        FlushFileBuffers(logger.file_handle);
+        CloseHandle(logger.file_handle);
+        logger.file_handle = INVALID_HANDLE_VALUE;
     }
-    __finally {
-        LeaveCriticalSection(&logger.lock);
-        DeleteCriticalSection(&logger.lock);
-    }
+    logger.initialized = false;
+
+    LOG_DEBUG("Logger cleanup complete. Stats: Writes: %zu, Failed: %zu, Bytes: %zu, Retries: %zu",
+              logger.stats.total_writes,
+              logger.stats.failed_writes,
+              logger.stats.bytes_written,
+              logger.stats.retry_count);
+
+    LeaveCriticalSection(&logger.lock);
+    DeleteCriticalSection(&logger.lock);
 }
+
 
 // Write data to log file
 bool write_to_log(const char* data, size_t size) {
@@ -159,10 +149,16 @@ static bool format_timestamp(char* buffer, size_t size) {
     struct tm timeinfo;
 
     time(&now);
+
+    #ifdef _WIN32
     if (localtime_s(&timeinfo, &now) != 0) {
-        LOG_DEBUG("Failed to get local time");
         return false;
     }
+    #else
+    if (localtime_r(&now, &timeinfo) == NULL) {
+        return false;
+    }
+    #endif
 
     int written = snprintf(buffer, size, "[%04d-%02d-%02d %02d:%02d:%02d] ",
         timeinfo.tm_year + 1900,
@@ -172,10 +168,10 @@ static bool format_timestamp(char* buffer, size_t size) {
         timeinfo.tm_min,
         timeinfo.tm_sec);
 
-    return (written > 0 && written < size);
+    return (written > 0 && (size_t)written < size);
 }
 
-// Write data with timestamp
+
 static bool write_with_timestamp(const char* data, size_t size) {
     char timestamp[LOG_TIMESTAMP_SIZE];
     if (!format_timestamp(timestamp, sizeof(timestamp))) {
@@ -188,45 +184,38 @@ static bool write_with_timestamp(const char* data, size_t size) {
     DWORD total_bytes = 0;
     DWORD written;
 
-    __try {
-        // Write timestamp
-        if (!write_with_retry(logger.file_handle, timestamp, strlen(timestamp), &written)) {
-            set_logger_error_internal(LOG_ERROR_WRITE);
-            logger.stats.failed_writes++;
-            __leave;
-        }
+    // Write timestamp
+    if (write_with_retry(logger.file_handle, timestamp, strlen(timestamp), &written)) {
         total_bytes += written;
 
-        // Write data
-        if (!write_with_retry(logger.file_handle, data, size, &written)) {
-            set_logger_error_internal(LOG_ERROR_WRITE);
-            logger.stats.failed_writes++;
-            __leave;
-        }
-        total_bytes += written;
-
-        // Write newline if needed
-        if (data[size-1] != '\n') {
-            const char newline = '\n';
-            if (!write_with_retry(logger.file_handle, &newline, 1, &written)) {
-                set_logger_error_internal(LOG_ERROR_WRITE);
-                logger.stats.failed_writes++;
-                __leave;
-            }
+        if (write_with_retry(logger.file_handle, data, size, &written)) {
             total_bytes += written;
-        }
 
+            if (data[size - 1] != '\n') {
+                const char newline = '\n';
+                if (write_with_retry(logger.file_handle, &newline, 1, &written)) {
+                    total_bytes += written;
+                    success = true;
+                }
+            } else {
+                success = true;
+            }
+        }
+    }
+
+    if (!success) {
+        set_logger_error_internal(LOG_ERROR_WRITE);
+        logger.stats.failed_writes++;
+    } else {
         logger.stats.total_writes++;
         logger.stats.bytes_written += total_bytes;
         logger.current_file_size += total_bytes;
-        success = true;
-    }
-    __finally {
-        LeaveCriticalSection(&logger.lock);
     }
 
+    LeaveCriticalSection(&logger.lock);
     return success;
 }
+
 
 // Write with retry logic
 static bool write_with_retry(HANDLE handle, const void* data, 
@@ -246,7 +235,7 @@ static bool check_file_size(size_t additional_bytes) {
     if (logger.current_file_size + additional_bytes > LOG_MAX_FILE_SIZE) {
         set_logger_error_internal(LOG_ERROR_SIZE);
         LOG_DEBUG("File size limit reached: current=%zu, additional=%zu, max=%zu",
-                 logger.current_file_size, additional_bytes, LOG_MAX_FILE_SIZE);
+          logger.current_file_size, (size_t)additional_bytes, (size_t)LOG_MAX_FILE_SIZE);
         return false;
     }
     return true;
@@ -281,21 +270,16 @@ bool flush_log(void) {
 
     if (!success) {
         set_logger_error_internal(LOG_ERROR_WRITE);
-        LOG_DEBUG("Failed to flush log file (Error: %lu)", GetLastError());
+        LOG_DEBUG("Failed to flush log file (Error: %u)", GetLastError());
     }
 
     return success;
 }
 
-// Utility functions implementation...
-[Previous utility functions remain the same]
-
 // Internal helper functions
 static void set_logger_error_internal(DWORD error_code) {
     logger.last_error = error_code;
-    DWORD sys_error = GetLastError();
-    LOG_DEBUG("Logger error set: %lu (System error: %lu)", 
-              error_code, sys_error);
+    LOG_DEBUG("Logger error set: %u", error_code);
 }
 
 static bool validate_logger_state(void) {

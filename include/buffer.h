@@ -6,7 +6,7 @@
 
 // Buffer configuration
 #define BUFFER_SIZE 4096
-#define BUFFER_FLUSH_THRESHOLD (BUFFER_SIZE * 0.75)
+#define BUFFER_FLUSH_THRESHOLD ((BUFFER_SIZE * 3) / 4)
 #define BUFFER_MAX_EVENT_SIZE 1024
 
 // Safety checks

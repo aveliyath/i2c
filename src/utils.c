@@ -62,7 +62,7 @@ bool create_directory_if_needed(const char* path) {
     DWORD error = GetLastError();
     if (error == ERROR_ALREADY_EXISTS) return true;
     
-    debug_print("Failed to create directory: %lu", error);
+    debug_print("Failed to create directory: %u", error);
     return false;
 }
 
@@ -119,6 +119,7 @@ bool ensure_path_exists(const char* path) {
 }
 
 void debug_print(const char* format, ...) {
+    (void)format;
 #ifdef DEBUG
     va_list args;
     va_start(args, format);

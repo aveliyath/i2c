@@ -106,6 +106,8 @@ typedef struct {
 
 // Core functions
 bool init_hooks(EventCallback callback);
+bool register_hook_callback(EventCallback callback);
+void unregister_hook_callback(EventCallback callback);
 void cleanup_hooks(void);
 bool process_events(void);
 bool are_hooks_active(void);
@@ -121,3 +123,5 @@ size_t get_total_events(void);
 size_t get_dropped_events(void);
 size_t get_window_changes(void);
 size_t get_queue_overflows(void);  
+
+#endif 
