@@ -17,29 +17,28 @@ static void reset_buffer_stats_internal(void);
 
 // Initialize buffer
 bool init_buffer(void) {
-    // Check if already initialized
+    // Initialize critical section
+    if (!InitializeCriticalSectionAndSpinCount(&buffer.lock, 0x00000400)) { 
+        set_buffer_error_internal(BUFFER_ERROR_INIT);
+        return false;
+    }
+
     EnterCriticalSection(&buffer.lock);
+
+    // Check if already initialized
     if (buffer.initialized) {
         set_buffer_error_internal(BUFFER_ERROR_INIT);
         LeaveCriticalSection(&buffer.lock);
+        DeleteCriticalSection(&buffer.lock);
         return false;
     }
-    LeaveCriticalSection(&buffer.lock);
-
-    // Initialize critical section
-    if (!InitializeCriticalSectionAndSpinCount(&buffer.lock, 0x00000400)) { // 0x00000400: Spin count
-        set_buffer_error_internal(BUFFER_ERROR_INIT);
-        return false;
-    }
-
-    EnterCriticalSection(&buffer.lock);
 
     // Allocate and initialize buffer memory
     buffer.data = (char *)malloc(BUFFER_SIZE);
     if (!buffer.data) {
+        set_buffer_error_internal(BUFFER_ERROR_MEMORY);
         LeaveCriticalSection(&buffer.lock);
         DeleteCriticalSection(&buffer.lock);
-        set_buffer_error_internal(BUFFER_ERROR_MEMORY);
         return false;
     }
 

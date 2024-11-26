@@ -1,15 +1,19 @@
 # Compiler and flags
 CC = gcc
-CFLAGS = -Wall -Wextra -Werror -I$(shell cygpath -w ./include)
+CFLAGS = -Wall -Wextra -Werror -Iinclude
 LDFLAGS = 
 
 # OS-specific settings
 ifeq ($(OS),Windows_NT)
-    LDFLAGS += -luser32
+    LDFLAGS += -luser32 -lpsapi
     TARGET_EXT = .exe
+    RM = del /Q
+    RMDIR = rmdir /S /Q
 else
     LDFLAGS += -lX11
     TARGET_EXT =
+    RM = rm -rf
+    RMDIR = rm -rf
 endif
 
 # Directories
@@ -33,8 +37,8 @@ TEST_TARGET = run_tests$(TARGET_EXT)
 all: dirs $(TARGET)
 
 dirs:
-	@mkdir -p $(OBJ_DIR)
-	@mkdir -p $(LOG_DIR)
+	@if not exist $(OBJ_DIR) mkdir $(OBJ_DIR)
+	@if not exist $(LOG_DIR) mkdir $(LOG_DIR)
 
 $(TARGET): $(OBJS)
 	$(CC) $(OBJS) -o $@ $(LDFLAGS)
@@ -54,7 +58,10 @@ $(OBJ_DIR)/%.o: $(TEST_DIR)/%.c
 
 # Clean target
 clean:
-	rm -rf $(OBJ_DIR) $(TARGET) $(TEST_TARGET) $(LOG_DIR)/*
+	@if exist $(OBJ_DIR) $(RMDIR) $(OBJ_DIR)
+	@if exist $(LOG_DIR) $(RMDIR) $(LOG_DIR)
+	@if exist $(TARGET) $(RM) $(TARGET)
+	@if exist $(TEST_TARGET) $(RM) $(TEST_TARGET)
 
 # Debug build
 debug: CFLAGS += -g -DDEBUG

@@ -1,0 +1,13 @@
+[2024-11-26 20:56:20] Window Change: main.c - i2c - Visual Studio Code
+[2024-11-26 20:56:25] Mouse Click: (737, 1052)
+[2024-11-26 20:56:25] Mouse Click: (737, 1052)
+[2024-11-26 20:56:26] Window Change: Bericht über die Arbeit des Programms
+[2024-11-26 20:56:26] Mouse Click: (737, 1052)
+[2024-11-26 20:56:26] Mouse Click: (737, 1052)
+[2024-11-26 20:56:26] Window Change: main.c - i2c - Visual Studio Code
+[2024-11-26 20:56:27] Mouse Click: (703, 980)
+[2024-11-26 20:56:27] Mouse Click: (703, 980)
+[2024-11-26 20:56:29] Mouse Click: (704, 951)
+[2024-11-26 20:56:29] Mouse Click: (704, 951)
+[2024-11-26 20:56:31] Key Press: 162
+[2024-11-26 20:56:31] Key Press: 67

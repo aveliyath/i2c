@@ -150,15 +150,12 @@ static bool format_timestamp(char* buffer, size_t size) {
 
     time(&now);
 
-    #ifdef _WIN32
-    if (localtime_s(&timeinfo, &now) != 0) {
+    // Get local time in a thread-safe way
+    struct tm* tmp = localtime(&now);
+    if (!tmp) {
         return false;
     }
-    #else
-    if (localtime_r(&now, &timeinfo) == NULL) {
-        return false;
-    }
-    #endif
+    timeinfo = *tmp;
 
     int written = snprintf(buffer, size, "[%04d-%02d-%02d %02d:%02d:%02d] ",
         timeinfo.tm_year + 1900,

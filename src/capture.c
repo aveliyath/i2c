@@ -322,7 +322,7 @@ static void format_event_entry(const Event* event, char* buffer, size_t size) {
         case EVENT_KEY_PRESS:
         case EVENT_KEY_RELEASE:
             snprintf(buffer, size,
-                    "[%s] KEY %s VK:0x%04X SC:0x%04X%s%s%s%s\n",
+                    "[%s] KEY %s VK:0x%04lX SC:0x%04lX%s%s%s%s\n",
                     timestamp,
                     event->type == EVENT_KEY_PRESS ? "DOWN" : "UP",
                     event->data.keyboard.vkCode,
@@ -337,7 +337,7 @@ static void format_event_entry(const Event* event, char* buffer, size_t size) {
         case EVENT_MOUSE_MOVE:
         case EVENT_MOUSE_WHEEL:
             snprintf(buffer, size,
-                    "[%s] MOUSE %s X:%d Y:%d BTN:%s%s%s WHL:%d\n",
+                    "[%s] MOUSE %s X:%ld Y:%ld BTN:%s%s%s WHL:%d\n",
                     timestamp,
                     event->type == EVENT_MOUSE_CLICK ? "CLICK" :
                     event->type == EVENT_MOUSE_MOVE ? "MOVE" : "WHEEL",
@@ -351,7 +351,7 @@ static void format_event_entry(const Event* event, char* buffer, size_t size) {
 
         case EVENT_WINDOW_CHANGE:
             snprintf(buffer, size,
-                    "[%s] WINDOW TITLE:'%s' PROCESS:'%s' PID:%u\n",
+                    "[%s] WINDOW TITLE:'%s' PROCESS:'%s' PID:%lu\n",
                     timestamp,
                     event->data.window.title,
                     event->data.window.process,

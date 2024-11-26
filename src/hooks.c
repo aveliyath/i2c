@@ -2,12 +2,18 @@
 #include "logger.h"
 #include <stdio.h>
 #include <string.h>
+#include <windows.h>
+#include <winuser.h>
 
 // Debug logging
 #ifdef DEBUG
     #define HOOK_DEBUG(msg, ...) fprintf(stderr, "[Hook] " msg "\n", ##__VA_ARGS__)
 #else
     #define HOOK_DEBUG(msg, ...)
+#endif
+
+#ifndef LLMHF_INJECTED
+#define LLMHF_INJECTED 0x00000001
 #endif
 
 LRESULT CALLBACK keyboard_proc(int nCode, WPARAM wParam, LPARAM lParam);
