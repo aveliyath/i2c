@@ -10,14 +10,14 @@ A keylogger application that captures keyboard and mouse input events and logs t
 
 ## Table of Contents
 
-1. [Features](#features)
-2. [Technical Details](#technical-details)
-3. [Requirements](#requirements)
-4. [Installation](#installation)
-5. [Usage](#usage)
-6. [Project Structure](#project-structure)
-7. [File Structure](#project-structure)
-8. [Configuration](#configuration)
+1. Features
+2. Technical Details
+3. Requirements
+4. Installation
+5. Usage
+6. Project Structure
+7. File Structure
+8. Configuration
 
 
 ***
