@@ -1,7 +1,7 @@
 # I2C
 Project for the HSLU course I2C.
 ---
-Alvin Veliyath, Flora Gashi, Fabian Lehman
+Alvin Veliyath, Flora Gashi, Fabian Lehmann
 
 
 # Keylogger Project
