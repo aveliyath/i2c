@@ -43,9 +43,7 @@
     #define BUFFER_LOG(msg, ...)
 #endif
 
-/**
- * Buffer structure containing all buffer-related data and state
- */
+// Buffer structure containing all buffer-related data and state
 typedef struct {
     char* data;                  // Buffer data
     volatile size_t size;        // Current size
@@ -82,4 +80,4 @@ bool is_buffer_empty(void);
 float get_buffer_usage_percentage(void);
 void reset_buffer_stats(void);
 
-#endif // BUFFER_H
+#endif

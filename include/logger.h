@@ -27,9 +27,7 @@
     #define LOG_DEBUG(msg, ...)
 #endif
 
-/**
- * Logger structure containing all logger-related data and state
- */
+// Logger structure containing all logger-related data and state
 typedef struct {
     HANDLE file_handle;         // File handle for the log file
     char filepath[LOG_MAX_PATH];// Path to the log file
@@ -59,4 +57,4 @@ void reset_logger_stats(void);
 bool check_logger_health(void);
 size_t get_current_file_size(void);
 
-#endif // LOGGER_H
+#endif

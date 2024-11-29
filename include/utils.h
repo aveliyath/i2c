@@ -24,4 +24,4 @@ bool ensure_path_exists(const char* path);
 // Debug utilities
 void debug_print(const char* format, ...);
 
-#endif // UTILS_H
+#endif

@@ -68,4 +68,4 @@ DWORD get_capture_error(void);
 bool flush_capture_buffer(void);
 bool is_capture_buffer_full(void);
 
-#endif // CAPTURE_H
+#endif 
