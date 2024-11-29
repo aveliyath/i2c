@@ -9,7 +9,7 @@
 // Global logger instance
 static Logger logger = {0};
 
-// Forward declarations of internal functions
+// Declarations of internal helper functions
 static void set_logger_error_internal(DWORD error_code);
 static bool format_timestamp(char* buffer, size_t size);
 static bool write_with_timestamp(const char* data, size_t size);
@@ -19,7 +19,7 @@ static bool write_with_retry(HANDLE handle, const void* data,
                            DWORD size, DWORD* written);
 static bool check_file_size(size_t additional_bytes);
 
-// Initialize logger
+// Initialize logger with specified file path
 bool init_logger(const char* filepath) {
     if (!filepath || strlen(filepath) >= LOG_MAX_PATH) {
         set_logger_error_internal(LOG_ERROR_INVALID);
@@ -50,7 +50,7 @@ bool init_logger(const char* filepath) {
     EnterCriticalSection(&logger.lock);
     bool init_success = false;
 
-    // Create or open log file
+    // Open or create log file
     logger.file_handle = CreateFileA(
         filepath,
         FILE_APPEND_DATA,
@@ -65,7 +65,7 @@ bool init_logger(const char* filepath) {
         set_logger_error_internal(LOG_ERROR_FILE);
         LOG_DEBUG("Failed to open log file: %s (Error: %u)", filepath, GetLastError());
     } else {
-        // Get initial file size
+        // Determine the initial file size
         LARGE_INTEGER file_size;
         if (GetFileSizeEx(logger.file_handle, &file_size)) {
             logger.current_file_size = (size_t)file_size.QuadPart;
@@ -85,6 +85,7 @@ bool init_logger(const char* filepath) {
         }
     }
 
+    // Clean up if initialization fails
     if (!init_success && logger.file_handle != INVALID_HANDLE_VALUE) {
         CloseHandle(logger.file_handle);
         logger.file_handle = INVALID_HANDLE_VALUE;
@@ -98,7 +99,6 @@ bool init_logger(const char* filepath) {
     return init_success;
 }
 
-
 void cleanup_logger(void) {
     if (!logger.initialized) {
         return;
@@ -106,6 +106,7 @@ void cleanup_logger(void) {
 
     EnterCriticalSection(&logger.lock);
 
+    // Close the log file handle
     if (logger.file_handle != INVALID_HANDLE_VALUE) {
         FlushFileBuffers(logger.file_handle);
         CloseHandle(logger.file_handle);
@@ -125,6 +126,7 @@ void cleanup_logger(void) {
 
 
 // Write data to log file
+// Automatically appends a timestamp and handles retries if write operations fail
 bool write_to_log(const char* data, size_t size) {
     if (!data || size == 0 || size > LOG_BUFFER_SIZE) {
         set_logger_error_internal(LOG_ERROR_INVALID);
@@ -136,6 +138,7 @@ bool write_to_log(const char* data, size_t size) {
         return false;
     }
 
+    // Check if the log file would exceed its size limit
     if (!check_file_size(size + LOG_TIMESTAMP_SIZE + 1)) {  // +1 for potential newline
         return false;
     }
@@ -143,7 +146,7 @@ bool write_to_log(const char* data, size_t size) {
     return write_with_timestamp(data, size);
 }
 
-// Format current timestamp
+// Outputs a timestamp in the format [YYYY-MM-DD HH:MM:SS]
 static bool format_timestamp(char* buffer, size_t size) {
     time_t now;
     struct tm timeinfo;
@@ -181,13 +184,15 @@ static bool write_with_timestamp(const char* data, size_t size) {
     DWORD total_bytes = 0;
     DWORD written;
 
-    // Write timestamp
+    // Write timestamp first
     if (write_with_retry(logger.file_handle, timestamp, strlen(timestamp), &written)) {
         total_bytes += written;
 
+        // Write the actual data
         if (write_with_retry(logger.file_handle, data, size, &written)) {
             total_bytes += written;
 
+            // Append a newline if not already present
             if (data[size - 1] != '\n') {
                 const char newline = '\n';
                 if (write_with_retry(logger.file_handle, &newline, 1, &written)) {
@@ -200,6 +205,7 @@ static bool write_with_timestamp(const char* data, size_t size) {
         }
     }
 
+    // Update statistics and error codes
     if (!success) {
         set_logger_error_internal(LOG_ERROR_WRITE);
         logger.stats.failed_writes++;
@@ -214,7 +220,8 @@ static bool write_with_timestamp(const char* data, size_t size) {
 }
 
 
-// Write with retry logic
+// Retry logic for writing data to a file
+// Attempts to write data multiple times before giving up
 static bool write_with_retry(HANDLE handle, const void* data, 
                            DWORD size, DWORD* written) {
     for (int retry = 0; retry < LOG_MAX_WRITE_RETRIES; retry++) {
@@ -273,12 +280,13 @@ bool flush_log(void) {
     return success;
 }
 
-// Internal helper functions
+// Set an internal error code for the logger
 static void set_logger_error_internal(DWORD error_code) {
     logger.last_error = error_code;
     LOG_DEBUG("Logger error set: %u", error_code);
 }
 
+// Validate the current state of the logger
 static bool validate_logger_state(void) {
     EnterCriticalSection(&logger.lock);
     bool valid = logger.initialized && 

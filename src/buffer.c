@@ -9,15 +9,15 @@
 // Global buffer instance
 static Buffer buffer = {0};
 
-// Forward declarations of internal functions
+// Internal utility functions to manage errors, validate state, and reset stats
 static void set_buffer_error_internal(DWORD error_code);
 static bool should_flush_buffer(void);
 static bool validate_buffer_state(void);
 static void reset_buffer_stats_internal(void);
 
-// Initialize buffer
+// Sets up the buffer for use, including memory allocation and critical section initialization
 bool init_buffer(void) {
-    // Initialize critical section
+    // Initialize critical section for thread safety
     if (!InitializeCriticalSectionAndSpinCount(&buffer.lock, 0x00000400)) { 
         set_buffer_error_internal(BUFFER_ERROR_INIT);
         return false;
@@ -42,6 +42,7 @@ bool init_buffer(void) {
         return false;
     }
 
+    // Initialize buffer metadata
     memset(buffer.data, 0, BUFFER_SIZE);
     buffer.capacity = BUFFER_SIZE;
     buffer.size = 0;
@@ -55,7 +56,7 @@ bool init_buffer(void) {
     return true;
 }
 
-// Clean up buffer resources
+// Releases memory and critical section resources associated with the buffer
 void cleanup_buffer(void) {
     EnterCriticalSection(&buffer.lock);
     if (!buffer.initialized) {
@@ -63,7 +64,7 @@ void cleanup_buffer(void) {
         return;
     }
 
-    // Flush remaining data
+    // Flush remaining data in buffer
     if (buffer.size > 0) {
         BUFFER_LOG("Flushing remaining %zu bytes during cleanup", buffer.size);
         force_flush_buffer();
@@ -75,6 +76,7 @@ void cleanup_buffer(void) {
         buffer.data = NULL;
     }
 
+    // Reset buffer metadata
     buffer.size = 0;
     buffer.capacity = 0;
     buffer.initialized = false;
@@ -84,12 +86,12 @@ void cleanup_buffer(void) {
                buffer.stats.total_writes, buffer.stats.failed_writes);
     LeaveCriticalSection(&buffer.lock);
 
-    // Delete critical section
+    // Delete critical section to prevent further access
     DeleteCriticalSection(&buffer.lock);
 }
 
 
-// Add data to buffer
+// Appends new data to the buffer, flushing it if necessary when full
 bool add_to_buffer(const char *event_data, size_t data_size) {
     if (!event_data || data_size == 0 || data_size > BUFFER_MAX_EVENT_SIZE) {
         set_buffer_error_internal(BUFFER_ERROR_INVALID);
@@ -109,7 +111,7 @@ bool add_to_buffer(const char *event_data, size_t data_size) {
 
     EnterCriticalSection(&buffer.lock);
 
-    // Check if there's enough space
+    // Check if the buffer has enough space and flush if necessary
     if (buffer.size + data_size > buffer.capacity) {
         BUFFER_LOG("Buffer full, attempting flush before add");
         if (!force_flush_buffer()) {
@@ -129,6 +131,7 @@ bool add_to_buffer(const char *event_data, size_t data_size) {
         LeaveCriticalSection(&buffer.lock);
         return true;
     } else {
+        // If buffer is still full after flush, return error
         set_buffer_error_internal(BUFFER_ERROR_FULL);
         buffer.stats.failed_writes++;
         BUFFER_LOG("Buffer full after flush attempt");
@@ -144,7 +147,7 @@ static bool should_flush_buffer(void) {
     return buffer.size >= BUFFER_FLUSH_THRESHOLD;
 }
 
-// Flush buffer if threshold is reached
+// Writes buffer data to the log if the flush threshold is met
 bool flush_buffer_if_needed(void) {
     if (!validate_buffer_state()) {
         return false;

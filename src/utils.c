@@ -5,8 +5,9 @@
 #include <stdarg.h>
 #include <ctype.h>
 
+// Utility to get the current timestamp as a string in the format "YYYYMMDD_HHMMSS"
 void get_timestamp_string(char* buffer, size_t size) {
-    if (!buffer || size < 20) return;  // Add safety check
+    if (!buffer || size < 20) return;
     SYSTEMTIME st;
     GetLocalTime(&st);
     snprintf(buffer, size, "%04d%02d%02d_%02d%02d%02d",
@@ -14,10 +15,12 @@ void get_timestamp_string(char* buffer, size_t size) {
              st.wHour, st.wMinute, st.wSecond);
 }
 
+// Get the current time in milliseconds since system started
 DWORD get_time_ms(void) {
     return GetTickCount();
 }
 
+// Check if a string ends with a specific suffix
 bool str_ends_with(const char* str, const char* suffix) {
     if (!str || !suffix) return false;
     size_t str_len = strlen(str);
@@ -26,8 +29,9 @@ bool str_ends_with(const char* str, const char* suffix) {
     return strcmp(str + str_len - suffix_len, suffix) == 0;
 }
 
+// Remove leading and trailing whitespace from a string
 void str_trim(char* str) {
-    if (!str || !*str) return;  // Check for empty string
+    if (!str || !*str) return;
     
     char* start = str;
     char* end = str + strlen(str) - 1;
@@ -40,10 +44,12 @@ void str_trim(char* str) {
     str[len] = '\0';
 }
 
+// Copy a string safely into buffer with size constraints
 size_t str_copy_safe(char* dest, const char* src, size_t size) {
     if (!dest || !src || size == 0) return 0;
     size_t len = strlen(src);
-    if (len >= size) len = size - 1;
+    // Truncate if necessary
+    if (len >= size) len = size - 1; 
     memcpy(dest, src, len);
     dest[len] = '\0';
     return len;
@@ -66,6 +72,7 @@ bool create_directory_if_needed(const char* path) {
     return false;
 }
 
+// Get the size of a file in bytes
 size_t get_file_size(const char* path) {
     WIN32_FILE_ATTRIBUTE_DATA attrs;
     if (!GetFileAttributesExA(path, GetFileExInfoStandard, &attrs)) {

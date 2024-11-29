@@ -14,9 +14,9 @@
 
 // Capture system state
 typedef struct {
-    CaptureConfig config;          // Current configuration
+    CaptureConfig config;          // Current capture configuration
     CaptureStats stats;           // Capture statistics
-    CRITICAL_SECTION lock;        // Thread synchronization
+    CRITICAL_SECTION lock;        // Synchronization for thread safety
     FILE* log_file;              // Current log file handle
     DWORD last_flush;            // Last flush timestamp
     bool initialized;            // Initialization flag
@@ -29,7 +29,7 @@ typedef struct {
 
 static CaptureSystem capture = {0};
 
-// Forward declarations
+// Internal helpers used to manage various capture-related tasks
 static bool open_log_file(void);
 static void close_log_file(void);
 static bool rotate_log_file(void);
@@ -45,7 +45,7 @@ static bool flush_buffer_to_file(void);
 static bool validate_config(const CaptureConfig* config);
 static void cleanup_capture_internal(void);
 
-// Event callback for hooks
+// Called whenever an event (e.g., key press, mouse click) is captured by the hooks
 static void capture_event_callback(const Event* event) {
     if (!capture.active || !event) 
     printf("[Capture] Callback received no event or capture is inactive.\n");
@@ -57,6 +57,7 @@ static void capture_event_callback(const Event* event) {
     format_event_entry(event, entry, sizeof(entry));
 
     if (capture.config.buffer_events) {
+        // Add event to the buffer
         if (buffer_event_entry(entry)) {
             capture.stats.events_buffered++;
 
@@ -78,6 +79,7 @@ static void capture_event_callback(const Event* event) {
         }
     }
 
+    // Rotate the log file if necessary
     if (should_rotate_log()) {
         rotate_log_file();
     }
@@ -85,14 +87,14 @@ static void capture_event_callback(const Event* event) {
     LeaveCriticalSection(&capture.lock);
 }
 
-
+// Sets up the capture system, including configuration, logging, and buffer allocation
 bool init_capture(const CaptureConfig* config) {
     if (capture.initialized) {
         set_capture_error(CAPTURE_ERROR_INIT);
         return false;
     }
 
-    // Initialize critical section
+    // Initialize critical section for synchronization
     if (!InitializeCriticalSectionAndSpinCount(&capture.lock, 0x00000400)) {
         set_capture_error(CAPTURE_ERROR_INIT);
         return false;
@@ -120,6 +122,7 @@ bool init_capture(const CaptureConfig* config) {
         init_success = true;
     }
 
+    // Allocate buffer if buffering is enabled
     if (init_success && capture.config.buffer_events) {
         capture.buffer_capacity = CAPTURE_BUFFER_SIZE;
         capture.buffer = (char*)malloc(capture.buffer_capacity);
@@ -131,6 +134,7 @@ bool init_capture(const CaptureConfig* config) {
         }
     }
 
+    // Create log directory and open log file
     if (init_success) {
         if (!create_log_directory() || !open_log_file()) {
             cleanup_capture_internal();
@@ -157,7 +161,7 @@ bool init_capture(const CaptureConfig* config) {
     return init_success;
 }
 
-
+// Releases resources used by the capture system including buffer and log file
 void cleanup_capture(void) {
     if (!capture.initialized) return;
 
@@ -191,6 +195,7 @@ static void cleanup_capture_internal(void) {
     CAPTURE_DEBUG("Capture system cleaned up");
 }
 
+// Registers hooks and starts processing events
 bool start_capture(void) {
     if (!capture.initialized || capture.active) {
         set_capture_error(CAPTURE_ERROR_INIT);
@@ -215,7 +220,7 @@ bool start_capture(void) {
     return true;
 }
 
-
+// Unregisters hooks and stops processing events
 void stop_capture(void) {
     if (!capture.active) return;
 
@@ -236,7 +241,6 @@ void stop_capture(void) {
 
     LeaveCriticalSection(&capture.lock);
 }
-
 
 static bool open_log_file(void) {
     char full_path[CAPTURE_MAX_PATH + 10];
@@ -298,7 +302,6 @@ static bool rotate_log_file(void) {
     CAPTURE_DEBUG("Failed to rotate log file");
     return false;
 }
-
 
 static void format_event_entry(const Event* event, char* buffer, size_t size) {
     if (!event || !buffer || size == 0) return;

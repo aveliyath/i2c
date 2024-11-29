@@ -19,12 +19,12 @@
 LRESULT CALLBACK keyboard_proc(int nCode, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK mouse_proc(int nCode, WPARAM wParam, LPARAM lParam);
 
-// Global variables
+// Global variables for managing hooks
 static HookSystem hooks = {0};
-static volatile bool hooks_active = false;
+static volatile bool hooks_active = false; 
 static volatile DWORD last_error = HOOK_ERROR_NONE;
 
-// Forward declarations
+// Forward declarations for helper functions
 static bool init_critical_section(void);
 static void cleanup_critical_section(void);
 static void check_active_window(void);
@@ -40,14 +40,14 @@ static bool process_queued_event(void);
 static void process_remaining_events(void);
 static bool should_process_event(const Event* event);
 
-// Initialize hooks
+// Sets up keyboard and mouse hooks
 bool init_hooks(EventCallback callback) {
     if (hooks_active || !callback) {
         set_last_error(HOOK_ERROR_INVALID);
         return false;
     }
 
-    // Initialize critical sections
+    // Initialize thread synchronization structures
     if (!init_critical_section()) {
         set_last_error(HOOK_ERROR_INIT_FAILED);
         return false;
@@ -56,14 +56,12 @@ bool init_hooks(EventCallback callback) {
     EnterCriticalSection(&hooks.lock);
     bool init_success = true;
 
-    // Initialize callback and filters
+    // Set the callback function for processing events
     hooks.callback = callback;
     reset_hook_filters();
 
-    // Reset statistics
+    // Reset statistics and event queue
     memset(&hooks.stats, 0, sizeof(hooks.stats));
-
-    // Reset queue
     hooks.event_queue.queue_head = 0;
     hooks.event_queue.queue_tail = 0;
 
@@ -97,7 +95,7 @@ bool init_hooks(EventCallback callback) {
         }
     }
 
-    // Verify hooks are working
+    // Verify hooks functionality by testing dummy inputs
     if (init_success && !verify_hooks()) {
         set_last_error(HOOK_ERROR_HOOK_FAILED);
         HOOK_DEBUG("Hook verification failed");
@@ -120,17 +118,17 @@ bool init_hooks(EventCallback callback) {
     return init_success;
 }
 
+// Removes hooks, processes any remaining events, and releases resources
 void cleanup_hooks(void) {
     if (!hooks_active) {
         return;
     }
 
-    // Set inactive first to prevent new events
     hooks_active = false;
 
     EnterCriticalSection(&hooks.lock);
 
-    // Process remaining events
+    // Process any events still in queue
     process_remaining_events();
 
     // Unhook keyboard
@@ -145,22 +143,21 @@ void cleanup_hooks(void) {
         hooks.mouse = NULL;
     }
 
-    // Reset window tracking
+    // Reset window tracking and callback
     hooks.activeWindow = NULL;
     memset(hooks.windowTitle, 0, MAX_WINDOW_TITLE);
     memset(hooks.processName, 0, MAX_PROCESS_NAME);
-
-    // Clear callback
     hooks.callback = NULL;
 
     LeaveCriticalSection(&hooks.lock);
+
     cleanup_critical_section();
 
     HOOK_DEBUG("Hooks cleaned up successfully");
 }
 
 
-// Hook callbacks
+// Processes low-level keyboard input events
 LRESULT CALLBACK keyboard_proc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0 && hooks_active) {
         KBDLLHOOKSTRUCT* kb = (KBDLLHOOKSTRUCT*)lParam;
@@ -184,6 +181,7 @@ LRESULT CALLBACK keyboard_proc(int nCode, WPARAM wParam, LPARAM lParam) {
     return CallNextHookEx(hooks.keyboard, nCode, wParam, lParam);
 }
 
+// Processes low-level mouse input events
 LRESULT CALLBACK mouse_proc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0 && hooks_active) {
         MSLLHOOKSTRUCT* mouse = (MSLLHOOKSTRUCT*)lParam;
@@ -194,7 +192,7 @@ LRESULT CALLBACK mouse_proc(int nCode, WPARAM wParam, LPARAM lParam) {
     return CallNextHookEx(hooks.mouse, nCode, wParam, lParam);
 }
 
-// Event creation functions
+// Helper function to create a keyboard even
 static void create_keyboard_event(Event* event, KBDLLHOOKSTRUCT* kb) {
     if (!event || !kb) return;
 
@@ -204,7 +202,7 @@ static void create_keyboard_event(Event* event, KBDLLHOOKSTRUCT* kb) {
     event->data.keyboard.extended = (kb->flags & LLKHF_EXTENDED) != 0;
     event->data.keyboard.injected = (kb->flags & LLKHF_INJECTED) != 0;
 
-    // Modifier-Tastenstatus
+    // Capture the state of modifier keys
     event->data.keyboard.alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
     event->data.keyboard.shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
     event->data.keyboard.control = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -212,12 +210,13 @@ static void create_keyboard_event(Event* event, KBDLLHOOKSTRUCT* kb) {
                                (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
 }
 
-
+// Helper function to create a mouse event
 static void create_mouse_event(Event* event, MSLLHOOKSTRUCT* mouse, UINT msg) {
     if (!event || !mouse) return;
 
     event->timestamp = GetTickCount();
     
+    // Determine the type of mouse event
     switch (msg) {
         case WM_LBUTTONDOWN:
         case WM_RBUTTONDOWN:
@@ -275,7 +274,7 @@ static bool queue_event(const Event* event) {
     if (!event || !hooks_active) return false;
     
     if (!should_process_event(event)) {
-        return true; // Filtered out, but not an error
+        return true;
     }
 
     EnterCriticalSection(&hooks.event_queue.queue_lock);
@@ -395,7 +394,6 @@ static bool init_critical_section(void) {
     return true;
 }
 
-
 static void cleanup_critical_section(void) {
     if (hooks.lock.DebugInfo)
         DeleteCriticalSection(&hooks.lock);
@@ -434,7 +432,6 @@ static bool get_process_name(HWND hwnd, char* process_name, size_t size) {
     CloseHandle(hProcess);
     return success;
 }
-
 
 // Event filtering
 static bool should_process_event(const Event* event) {
