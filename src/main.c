@@ -41,12 +41,11 @@ static void event_callback(const Event* event) {
     
     // Add event to buffer and write it to log file
     add_to_buffer(event_data, strlen(event_data));
-    write_to_log(event_data, strlen(event_data));
 }
 
-// Signal handler for cleanup during termination
 void cleanup_handler(int signum) {
     printf("Signal received: %d. Setting running to 0.\n", signum);
+    force_flush_buffer();  // Flush any remaining events before exit
     running = 0;
 }
 
